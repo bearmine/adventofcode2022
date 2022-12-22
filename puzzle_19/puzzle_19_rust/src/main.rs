@@ -26,7 +26,7 @@ fn main() {
     let mut total_quality = 0;
     for blueprint in blueprint_list {
         let blueprint_number = blueprint.blueprint_number;
-        let solution = solve_blueprint(blueprint, 24).unwrap();
+        let solution = solve_blueprint(blueprint, 24, false).unwrap();
         println!("{}", solution);
         let quality = blueprint_number * solution.geode_amount;
         scores.push(format!("Blueprint {}: {}", blueprint_number, quality));
@@ -36,6 +36,80 @@ fn main() {
         println!("{}", score);
     }
     println!("Total Quality: {}", total_quality);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* Example Blueprints
+
+    Blueprint 1:
+    Each ore robot costs 4 ore.
+    Each clay robot costs 2 ore.
+    Each obsidian robot costs 3 ore and 14 clay.
+    Each geode robot costs 2 ore and 7 obsidian.
+
+    Blueprint 2:
+    Each ore robot costs 2 ore.
+    Each clay robot costs 3 ore.
+    Each obsidian robot costs 3 ore and 8 clay.
+    Each geode robot costs 3 ore and 12 obsidian.
+    */
+
+    #[test]
+    fn example_1() {
+        let blueprint = Blueprint::new(
+            1,
+            RobotBlueprint::new(RobotType::OreRobot, 4, 0, 0),
+            RobotBlueprint::new(RobotType::ClayRobot, 2, 0, 0),
+            RobotBlueprint::new(RobotType::ObsidianRobot, 3, 14, 0),
+            RobotBlueprint::new(RobotType::GeodeRobot, 2, 0, 7),
+        );
+
+        let result = solve_blueprint(blueprint, 24, false);
+
+        assert!(!result.is_none(), "result was None");
+
+        if let Some(result) = result {
+            println!("================================\n");
+            if let Some(chain) = &result.chain {
+                for turn in chain {
+                    println!("\n--------------------------------\n{}\n--------------------------------\n", turn)
+                }
+            }
+            println!("\n--------------------------------\n{}\n--------------------------------\n", result);
+
+            assert_eq!(result.geode_amount, 9, "Testing calculated result {} with expected result {}.", result.geode_amount, 9);
+        }
+    }
+
+    #[test]
+    fn example_2() {
+        let blueprint = Blueprint::new(
+            2,
+            RobotBlueprint::new(RobotType::OreRobot, 2, 0, 0),
+            RobotBlueprint::new(RobotType::ClayRobot, 3, 0, 0),
+            RobotBlueprint::new(RobotType::ObsidianRobot, 3, 8, 0),
+            RobotBlueprint::new(RobotType::GeodeRobot, 3, 0, 12),
+        );
+
+        let result = solve_blueprint(blueprint, 24, false);
+
+        assert!(!result.is_none(), "result was None");
+
+        if let Some(result) = result {
+            println!("================================\n");
+            if let Some(chain) = &result.chain {
+                for turn in chain {
+                    println!("\n--------------------------------\n{}\n--------------------------------\n", turn)
+                }
+            }
+            println!("\n--------------------------------\n{}\n--------------------------------\n", result);
+
+            assert_eq!(result.geode_amount, 12, "Testing calculated result {} with expected result {}.", result.geode_amount, 12);
+        }
+    }
 }
 
 pub(crate) struct TurnState {
@@ -48,10 +122,12 @@ pub(crate) struct TurnState {
     pub(crate) clay_robots: i32,
     pub(crate) obsidian_robots: i32,
     pub(crate) geode_robots: i32,
+    pub(crate) save_chain: bool,
+    pub(crate) chain: Option<Vec<TurnState>>,
 }
 
 impl TurnState {
-    pub fn new() -> Self {
+    pub fn new(save_chain: bool) -> Self {
         Self {
             current_minute: 0,
             ore_amount: 0,
@@ -62,6 +138,8 @@ impl TurnState {
             clay_robots: 0,
             obsidian_robots: 0,
             geode_robots: 0,
+            save_chain: save_chain,
+            chain: if save_chain { Some(Vec::new()) } else { None },
         }
     }
 
@@ -84,6 +162,8 @@ impl TurnState {
             clay_robots: self.clay_robots,
             obsidian_robots: self.obsidian_robots,
             geode_robots: self.geode_robots,
+            save_chain: self.save_chain,
+            chain: if let Some(c) = &self.chain { Some(c.iter().cloned().chain([self.clone_without_chain()]).collect()) } else { None },
         }
     }
 
@@ -91,7 +171,7 @@ impl TurnState {
     pub fn progress_and_add_robot(
         &self,
         number_of_minutes: i32,
-        robot_to_add: &RobotBlueprint,
+        robot_to_add: &RobotBlueprint
     ) -> Self {
         Self {
             current_minute: self.current_minute + number_of_minutes,
@@ -122,6 +202,24 @@ impl TurnState {
             } else {
                 self.geode_robots
             },
+            save_chain: self.save_chain,
+            chain: if let Some(c) = &self.chain { Some(c.iter().cloned().chain([self.clone_without_chain()]).collect()) } else { None },
+        }
+    }
+
+    fn clone_without_chain(&self) -> Self {
+        Self {
+            current_minute: self.current_minute.clone(),
+            ore_amount: self.ore_amount.clone(),
+            clay_amount: self.clay_amount.clone(),
+            obsidian_amount: self.obsidian_amount.clone(),
+            geode_amount: self.geode_amount.clone(),
+            ore_robots: self.ore_robots.clone(),
+            clay_robots: self.clay_robots.clone(),
+            obsidian_robots: self.obsidian_robots.clone(),
+            geode_robots: self.geode_robots.clone(),
+            save_chain: self.save_chain,
+            chain: None,
         }
     }
 }
@@ -138,6 +236,8 @@ impl Clone for TurnState {
             clay_robots: self.clay_robots.clone(),
             obsidian_robots: self.obsidian_robots.clone(),
             geode_robots: self.geode_robots.clone(),
+            save_chain: self.save_chain,
+            chain: self.chain.clone(),
         }
     }
 }
@@ -160,9 +260,9 @@ impl fmt::Display for TurnState {
     }
 }
 
-fn solve_blueprint(blueprint: Blueprint, max_depth_minutes: i32) -> Option<TurnState> {
+fn solve_blueprint(blueprint: Blueprint, max_depth_minutes: i32, save_chain: bool) -> Option<TurnState> {
     println!("Solving {}", blueprint);
-    let start_turn = TurnState::new();
+    let start_turn = TurnState::new(save_chain);
     let result = solver_branch(&blueprint, max_depth_minutes, &start_turn);
     return result;
 }
@@ -263,7 +363,8 @@ fn time_to_robot(current_state: &TurnState, robot_to_build: &RobotBlueprint) -> 
     let ore_num_turns = if ore_needed > 0 {
         if current_state.ore_robots > 0 {
             // Calc how many turns to get enough ore
-            (ore_needed as f32 / current_state.ore_robots as f32).ceil() as i32
+            // Add one because we can't use the ore the turn we get it
+            (ore_needed as f32 / current_state.ore_robots as f32).ceil() as i32 + 1
         } else {
             // Impossible to get enough ore
             return None;
@@ -275,7 +376,8 @@ fn time_to_robot(current_state: &TurnState, robot_to_build: &RobotBlueprint) -> 
     let clay_num_turns = if clay_needed > 0 {
         if current_state.clay_robots > 0 {
             // calc how many turns to get enough clay
-            (clay_needed as f32 / current_state.clay_robots as f32).ceil() as i32
+            // Add one because we can't use the clay the turn we get it
+            (clay_needed as f32 / current_state.clay_robots as f32).ceil() as i32 + 1
         } else {
             // Impossible to get enough clay
             return None;
@@ -287,7 +389,8 @@ fn time_to_robot(current_state: &TurnState, robot_to_build: &RobotBlueprint) -> 
     let obsidian_num_turns = if obsidian_needed > 0 {
         if current_state.obsidian_robots > 0 {
             // calc how many turns to get enough obsidian
-            (obsidian_needed as f32 / current_state.obsidian_robots as f32).ceil() as i32
+            // Add one because we can't use the obsidian the turn we get it
+            (obsidian_needed as f32 / current_state.obsidian_robots as f32).ceil() as i32 + 1
         } else {
             // Impossible to get enough obsidian
             return None;
